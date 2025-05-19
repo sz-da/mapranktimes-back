@@ -377,7 +377,7 @@ const setQueueDate = async (beatmapSet: BeatmapSet, accessToken: string) => {
     .reverse();
 
   let previousQueueDuration = 0;
-  let startDate: number | null = null;
+  let queuedAt: number | null = null;
   let lastDisqualifiedEvent: MapEvent | null = null;
   let nominators: number[] = [];
 
@@ -398,57 +398,54 @@ const setQueueDate = async (beatmapSet: BeatmapSet, accessToken: string) => {
     const event = events[i];
 
     switch (event.type) {
-      case "qualify": {
-        startDate = event.time;
+      case "qualify":
+        queuedAt = event.time;
 
-        // reset previousQueueDuration from changes to beatmap ranking timer
-        const rankingSystemUpdate = (new Date("2024-09-13T12:00:00.000Z"))
-          .getTime();
-        if (
-          i !== events.length - 1 && lastDisqualifiedEvent != null &&
-          event.time > rankingSystemUpdate &&
-          lastDisqualifiedEvent.time < rankingSystemUpdate
-        ) {
-          previousQueueDuration = 0;
+        // https://github.com/ppy/osu-web/blob/476cd205258873f899b3d8c81b2dbe7010799751/app/Models/Beatmapset.php#L762-L764
+        // haven't verified yet, but it appears that resets due to change in nominators are still affected by penaltyDays
+        if (lastDisqualifiedEvent != null && !sameIds(lastDisqualifiedEvent.nominators, nominators)) {
+          console.log(lastDisqualifiedEvent?.nominators);
+          console.log(nominators);
+          queuedAt = event.time;
         }
 
-        if (lastDisqualifiedEvent != null) {
-          // https://github.com/ppy/osu-web/blob/476cd205258873f899b3d8c81b2dbe7010799751/app/Models/Beatmapset.php#L762-L764
-          // haven't verified yet, but it appears that resets due to change in nominators are still affected by penaltyDays
-          if (!sameIds(lastDisqualifiedEvent.nominators, nominators)) {
-            previousQueueDuration = 0;
-          }
+        // https://github.com/ppy/osu-web/blob/476cd205258873f899b3d8c81b2dbe7010799751/app/Models/Beatmapset.php#L633-L653
+        if (
+          lastDisqualifiedEvent != null && diffsAdded(
+            beatmapSet.beatmaps.map((b) => b.id),
+            lastDisqualifiedEvent.beatmapIds,
+          )
+        ) {
+          console.log("reset");
+          queuedAt = event.time;
+        } else {
+          const maxAdjustment = (MINIMUM_DAYS_FOR_RANK - 1) * DAY;
+          const adjustment = Math.min(previousQueueDuration, maxAdjustment);
+          queuedAt = event.time - adjustment;
 
-          // https://github.com/ppy/osu-web/blob/476cd205258873f899b3d8c81b2dbe7010799751/app/Models/Beatmapset.php#L633-L653
-          if (
-            diffsAdded(
-              beatmapSet.beatmaps.map((b) => b.id),
-              lastDisqualifiedEvent.beatmapIds,
-            )
-          ) {
-            previousQueueDuration = 0;
-          } else {
+          if (lastDisqualifiedEvent != null) {
             const interval = (event.time - lastDisqualifiedEvent.time) / DAY;
             penaltyDays = Math.min(
               Math.floor(interval / 7),
               MAXIMUM_PENALTY_DAYS,
             );
+            queuedAt += penaltyDays * DAY;
           }
         }
+
         break;
-      }
       case "disqualify":
         lastDisqualifiedEvent = event;
 
-        if (startDate != null) {
-          previousQueueDuration += event.time - startDate;
+        if (queuedAt != null) {
+          previousQueueDuration = event.time - queuedAt;
         }
 
         nominators = [];
         break;
       case "rank":
         previousQueueDuration = 0;
-        startDate = null;
+        queuedAt = null;
         break;
       case "nominate":
         nominators.push(event.userId);
@@ -462,14 +459,8 @@ const setQueueDate = async (beatmapSet: BeatmapSet, accessToken: string) => {
   }
 
   // all maps need to be qualified for at least 7 days
-  const queueDuration = MINIMUM_DAYS_FOR_RANK * DAY;
-
-  const timeLeft = queueDuration - previousQueueDuration;
-
-  // maps need to be qualified for at least 1 day since lastest qualified date
   beatmapSet.queueDate = new Date(
-    beatmapSet.lastQualifiedDate!.getTime() + Math.max(DAY, timeLeft) +
-      penaltyDays * DAY,
+    queuedAt! + MINIMUM_DAYS_FOR_RANK * DAY,
   );
 
   console.log(new Date().toISOString(), "- success");
@@ -545,7 +536,7 @@ export const adjustRankDates = (
       if (
         filteredMaps[0].queueDate !== null &&
         qualifiedMap.rankDate.getTime() <
-          roundMinutes(filteredMaps[0].rankDate!.getTime(), true)
+        roundMinutes(filteredMaps[0].rankDate!.getTime(), true)
       ) {
         qualifiedMap.rankDate = new Date(
           roundMinutes(filteredMaps[0].rankDate!.getTime(), true),
@@ -561,7 +552,7 @@ export const adjustRankDates = (
           .every(
             (beatmapSet) =>
               roundMinutes(beatmapSet.rankDate!.getTime(), true) >=
-                roundMinutes(qualifiedMap.rankDateEarly!.getTime(), true),
+              roundMinutes(qualifiedMap.rankDateEarly!.getTime(), true),
           )
       ) {
         if (
@@ -570,15 +561,15 @@ export const adjustRankDates = (
             .every(
               (beatmapSet) =>
                 roundMinutes(beatmapSet.rankDate!.getTime(), true) ===
-                  roundMinutes(
-                    filteredMaps[RANK_PER_RUN - 1].rankDate!.getTime(),
-                    true,
-                  ),
+                roundMinutes(
+                  filteredMaps[RANK_PER_RUN - 1].rankDate!.getTime(),
+                  true,
+                ),
             )
         ) {
           qualifiedMap.rankDate = new Date(
             roundMinutes(filteredMaps[0].rankDate!.getTime(), true) +
-              RANK_INTERVAL * MINUTE,
+            RANK_INTERVAL * MINUTE,
           );
         } else {
           qualifiedMap.rankDate = new Date(
