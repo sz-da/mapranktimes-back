@@ -293,6 +293,7 @@ const setQueueDate = async (beatmapSet: BeatmapSet, accessToken: string) => {
           console.log(lastDisqualifiedEvent?.nominators);
           console.log(nominators);
           queuedAt = event.time;
+          previousQueueDuration = 0;
         }
 
         // https://github.com/ppy/osu-web/blob/476cd205258873f899b3d8c81b2dbe7010799751/app/Models/Beatmapset.php#L633-L653
